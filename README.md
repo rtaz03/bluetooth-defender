@@ -21,21 +21,39 @@ python main.py scan --known-devices devices.json --duration 15
 
 ### Honeypot
 
-Emulate a fake Bluetooth device (e.g. a speaker) and log every connection attempt. Optionally auto-retaliate with garbage bytes.
+Emulate a fake Bluetooth device (e.g. a speaker) and log every connection attempt. Optionally auto-retaliate with one or more modes.
 
 ```bash
 python main.py honeypot --name "Living Room Speaker"
-python main.py honeypot --name "Car Stereo" --retaliate --mode l2cap --known-devices devices.json
+python main.py honeypot --name "Car Stereo" --retaliate --known-devices devices.json
+python main.py honeypot --name "Kitchen Speaker" --retaliate --mode a2dp_garbage,pairing_loop,avctp
 ```
+
+The default retaliation is `a2dp_garbage,pairing_loop`.
 
 ### Streamer
 
-Stream garbage bytes to a target Bluetooth device.
+Stream garbage bytes to a target Bluetooth device. Supports comma-separated modes to run concurrently.
 
 ```bash
 python main.py stream AA:BB:CC:DD:EE:FF --mode l2cap --pattern random --duration 30
-python main.py stream AA:BB:CC:DD:EE:FF --mode spp --pattern 0xDEADBEEF
+python main.py stream AA:BB:CC:DD:EE:FF --mode a2dp_garbage,avctp --duration 15
+python main.py stream AA:BB:CC:DD:EE:FF --mode pairing_loop
 ```
+
+### Retaliation Modes
+
+| Mode | Type | Description |
+|------|------|-------------|
+| `l2cap` | Connection | Raw L2CAP byte flood on a dynamic PSM |
+| `spp` | Connection | RFCOMM/Serial Port Profile data flood |
+| `a2dp_garbage` | Connection | Malformed SBC audio frames over AVDTP |
+| `avctp` | Connection | Fake AV/C media control commands (play/pause/volume) |
+| `sdp_spam` | Connection | Oversized malformed SDP response PDUs |
+| `pairing_loop` | Device | Repeated pair/abort cycles forcing auth dialogs |
+| `name_spoof` | Device | Rotate advertised name to pollute device scans |
+
+Connection modes require an active Bluetooth connection. Device modes operate at the adapter level and can run without one. Multiple modes can be combined with commas.
 
 ### Log Viewer
 

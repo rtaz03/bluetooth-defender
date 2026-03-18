@@ -56,8 +56,8 @@ make clean       # Remove venv, caches, build artifacts
 
 ```bash
 python main.py scan --known-devices devices.json
-python main.py honeypot --name "Speaker Name" [--retaliate --mode l2cap]
-python main.py stream <MAC> --mode <l2cap|a2dp_garbage|spp> --pattern <random|zeros|hex> --duration <seconds>
+python main.py honeypot --name "Speaker Name" [--retaliate --mode a2dp_garbage,pairing_loop]
+python main.py stream <MAC> --mode <mode[,mode,...]> --pattern <random|zeros|hex> --duration <seconds>
 python main.py logs [--tool honeypot|scanner|streamer] [--mac AA:BB:CC:DD:EE:FF] [--date 2026-03-18] [--raw] [--last N]
 ```
 

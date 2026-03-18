@@ -87,6 +87,22 @@ def _load_events(tool_filter=None, mac_filter=None, date_filter=None):
     return events, len(log_files)
 
 
+def _rssi_trend_label(readings: list[int]) -> str:
+    """Describe RSSI trend from a list of readings over time."""
+    if len(readings) < 2:
+        return "—"
+    first_half = readings[: len(readings) // 2]
+    second_half = readings[len(readings) // 2 :]
+    avg_first = sum(first_half) / len(first_half)
+    avg_second = sum(second_half) / len(second_half)
+    diff = avg_second - avg_first
+    if diff > 5:
+        return "[bold red]approaching[/bold red]"
+    if diff < -5:
+        return "[green]moving away[/green]"
+    return "[dim]stable[/dim]"
+
+
 def _show_honeypot_summary(events):
     """Display honeypot events as an aggregated connection table."""
     connections_by_mac: dict[str, dict] = {}
@@ -103,6 +119,8 @@ def _show_honeypot_summary(events):
                 "last_seen": event.get("timestamp", ""),
                 "connection_count": 0,
                 "retaliations": 0,
+                "rssi_readings": [],
+                "last_distance": "—",
             }
         entry = connections_by_mac[mac]
         name = data.get("device_name")
@@ -111,6 +129,12 @@ def _show_honeypot_summary(events):
         entry["last_seen"] = event.get("timestamp", entry["last_seen"])
         if event["message"] == "connection":
             entry["connection_count"] += 1
+            rssi = data.get("rssi")
+            if rssi is not None:
+                entry["rssi_readings"].append(rssi)
+            distance = data.get("distance")
+            if distance:
+                entry["last_distance"] = distance
         if event["message"] == "retaliate_start":
             entry["retaliations"] += 1
 
@@ -122,6 +146,9 @@ def _show_honeypot_summary(events):
     table.add_column("MAC Address")
     table.add_column("Device Names")
     table.add_column("Connections", justify="right")
+    table.add_column("RSSI (last)", justify="right")
+    table.add_column("Distance", justify="center")
+    table.add_column("Trend")
     table.add_column("Retaliations", justify="right")
     table.add_column("First Seen")
     table.add_column("Last Seen")
@@ -131,10 +158,17 @@ def _show_honeypot_summary(events):
         key=lambda x: x[1]["connection_count"],
         reverse=True,
     ):
+        readings = entry["rssi_readings"]
+        last_rssi = f"{readings[-1]} dBm" if readings else "—"
+        trend = _rssi_trend_label(readings)
+
         table.add_row(
             entry["mac"],
             ", ".join(entry["names"]) or "Unknown",
             str(entry["connection_count"]),
+            last_rssi,
+            entry["last_distance"],
+            trend,
             str(entry["retaliations"]),
             entry["first_seen"][:19],
             entry["last_seen"][:19],
@@ -195,8 +229,57 @@ def _show_scanner_summary(events):
     console.print(table)
 
 
+MODE_IMPACT = {
+    "l2cap": "Baseband saturation — device lag, UI freezes, forced disconnects",
+    "spp": "Serial flood — application-layer crashes on devices with open SPP",
+    "a2dp_garbage": "Audio decoder corruption — loud static, glitches, decoder crash/reboot",
+    "avctp": "Phantom media controls — unexpected play/pause/volume, UI confusion",
+    "sdp_spam": "SDP parser exhaustion — slow service discovery, memory pressure",
+    "pairing_loop": "Auth dialog spam — repeated pairing prompts, BT stack exhaustion",
+    "name_spoof": "Scan pollution — phantom devices flooding attacker's device list",
+}
+
+
+def _estimate_impact(mode: str, packets: int, bytes_sent: int, errors: int) -> str:
+    """Estimate what the target is likely experiencing based on mode and stats."""
+    if errors > 0 and packets == 0:
+        return "[yellow]Target rejected connection — may have blocked us[/yellow]"
+
+    if mode in ("pairing_loop", "name_spoof"):
+        if packets == 0:
+            return "[yellow]No cycles completed — target may be out of range[/yellow]"
+        if packets < 3:
+            return "[yellow]Mild annoyance — a few prompts/phantom devices[/yellow]"
+        if packets < 10:
+            return "[bold yellow]Moderate disruption — repeated prompts piling up[/bold yellow]"
+        return "[bold red]Heavy disruption — BT stack under sustained pressure[/bold red]"
+
+    if packets == 0:
+        return "[yellow]No data sent — channel may have been rejected[/yellow]"
+
+    if mode == "a2dp_garbage":
+        if packets > 100:
+            return "[bold red]Sustained audio corruption — static/glitches, likely decoder crash[/bold red]"
+        return "[yellow]Brief audio disruption — garbled output[/yellow]"
+    if mode == "avctp":
+        if packets > 50:
+            return "[bold red]Media control chaos — phantom commands flooding device[/bold red]"
+        return "[yellow]Sporadic phantom media commands[/yellow]"
+    if mode == "sdp_spam":
+        if bytes_sent > 50_000:
+            return "[bold red]SDP parser under heavy load — discovery likely stalled[/bold red]"
+        return "[yellow]Light SDP pressure — discovery slowed[/yellow]"
+
+    # l2cap / spp
+    if bytes_sent > 100_000:
+        return "[bold red]Heavy bandwidth saturation — device likely lagging[/bold red]"
+    if bytes_sent > 10_000:
+        return "[bold yellow]Moderate pressure — some performance degradation[/bold yellow]"
+    return "[yellow]Light pressure — device may not notice yet[/yellow]"
+
+
 def _show_streamer_summary(events):
-    """Display streamer events as a session table."""
+    """Display streamer events as a session table with impact estimates."""
     sessions: list[dict] = []
     current: dict | None = None
     for event in events:
@@ -210,15 +293,16 @@ def _show_streamer_summary(events):
                 "started": event.get("timestamp", ""),
                 "packets": 0,
                 "bytes": 0,
-                "errors": [],
+                "errors": 0,
             }
         elif msg == "stream_complete" and current:
             current["packets"] = data.get("packets_sent", 0)
             current["bytes"] = data.get("bytes_sent", 0)
+            current["errors"] = data.get("errors", 0)
             sessions.append(current)
             current = None
         elif msg.endswith("_error") and current:
-            current["errors"].append(data.get("error", msg))
+            current["errors"] += 1
 
     if not sessions:
         console.print("[yellow]No streamer sessions found.[/yellow]")
@@ -227,23 +311,27 @@ def _show_streamer_summary(events):
     table = Table(title="Streamer — Sessions")
     table.add_column("Target MAC")
     table.add_column("Mode")
-    table.add_column("Pattern")
     table.add_column("Packets", justify="right")
     table.add_column("Bytes", justify="right")
-    table.add_column("Errors", justify="right")
+    table.add_column("Likely Target Impact")
     table.add_column("Started")
 
     for s in sessions:
+        impact = _estimate_impact(s["mode"], s["packets"], s["bytes"], s["errors"])
         table.add_row(
             s["mac"],
             s["mode"],
-            s["pattern"],
             str(s["packets"]),
             str(s["bytes"]),
-            str(len(s["errors"])),
+            impact,
             s["started"][:19],
         )
     console.print(table)
+
+    # Print mode reference after the table
+    console.print("\n[bold underline]Mode Effects Reference[/bold underline]")
+    for mode, desc in MODE_IMPACT.items():
+        console.print(f"  [bold]{mode}[/bold]: {desc}")
 
 
 def _show_raw_events(events, limit):
@@ -380,9 +468,12 @@ def cli():
         "--mode",
         "-m",
         type=str,
-        default="l2cap",
-        choices=["l2cap", "spp", "a2dp_garbage"],
-        help="Retaliation stream mode (default: l2cap)",
+        default="a2dp_garbage,pairing_loop",
+        help=(
+            "Retaliation mode(s), comma-separated "
+            "(default: a2dp_garbage,pairing_loop). "
+            "Options: l2cap, spp, a2dp_garbage, avctp, sdp_spam, pairing_loop, name_spoof"
+        ),
     )
     hp_parser.add_argument(
         "--known-devices",
@@ -405,8 +496,10 @@ def cli():
         "-m",
         type=str,
         default="l2cap",
-        choices=["l2cap", "spp", "a2dp_garbage"],
-        help="Streaming mode (default: l2cap)",
+        help=(
+            "Streaming mode(s), comma-separated (default: l2cap). "
+            "Options: l2cap, spp, a2dp_garbage, avctp, sdp_spam, pairing_loop, name_spoof"
+        ),
     )
     stream_parser.add_argument(
         "--pattern",

@@ -26,6 +26,7 @@ from defender.utils.bt_helpers import (
     DEVICE_CLASSES,
     find_usb_transport,
     normalize_mac,
+    rssi_to_distance_estimate,
 )
 from defender.utils.logging import get_logger, log_event
 
@@ -70,17 +71,23 @@ def build_live_display(state: HoneypotState) -> Table:
     conn_table = Table(show_header=True)
     conn_table.add_column("MAC")
     conn_table.add_column("Name")
+    conn_table.add_column("RSSI")
+    conn_table.add_column("Distance")
     conn_table.add_column("Since")
     conn_table.add_column("Count")
     for mac, info in state.connections.items():
+        rssi = info.get("rssi")
+        rssi_str = f"{rssi} dBm" if rssi is not None else "?"
         conn_table.add_row(
             mac,
             info.get("name", "?"),
+            rssi_str,
+            info.get("distance", "?"),
             info.get("connected_at", "?"),
             str(state.connection_counts.get(mac, 0)),
         )
     if not state.connections:
-        conn_table.add_row("[dim]Waiting for connections...[/dim]", "", "", "")
+        conn_table.add_row("[dim]Waiting for connections...[/dim]", "", "", "", "", "")
 
     # Recent events sub-table
     event_table = Table(show_header=True)
@@ -214,11 +221,16 @@ async def run(
         now = datetime.now(UTC)
         time_short = now.strftime("%H:%M:%S")
 
+        rssi = getattr(connection, "rssi", None)
+        distance = rssi_to_distance_estimate(rssi) if rssi is not None else "unknown"
+
         info = {
             "mac": mac,
             "name": connection.peer_name or "Unknown",
             "connected_at": time_short,
             "transport": str(connection.transport),
+            "rssi": rssi,
+            "distance": distance,
         }
 
         state.add_connection(mac, info)
@@ -226,36 +238,56 @@ async def run(
             {
                 "time": time_short,
                 "type": "CONNECT",
-                "details": f"{mac} ({info['name']})",
+                "details": f"{mac} ({info['name']}) RSSI: {rssi} ({distance})",
             }
         )
 
         log_data = {
             "mac": mac,
             "device_name": info["name"],
-            "rssi": getattr(connection, "rssi", None),
+            "rssi": rssi,
+            "distance": distance,
             "transport": str(connection.transport),
             "handle": connection.handle,
         }
         log_event(logger, "honeypot", "connection", **log_data)
 
-        console.print(f"[bold red]CONNECTION from {mac} ({info['name']})[/bold red]")
+        console.print(
+            f"[bold red]CONNECTION from {mac} ({info['name']})[/bold red] "
+            f"[dim]RSSI: {rssi} dBm — {distance}[/dim]"
+        )
 
         # Retaliate if enabled
         if retaliate and mac not in known_macs:
+            from defender.streamer import (
+                DEVICE_MODES,
+                STREAM_MODES,
+                device_mode_to_target,
+                stream_to_connection,
+            )
+
+            modes = [m.strip() for m in retaliate_mode.split(",") if m.strip()]
             state.add_event(
                 {
                     "time": time_short,
                     "type": "RETALIATE",
-                    "details": f"Streaming {retaliate_mode} to {mac}",
+                    "details": f"Modes: {', '.join(modes)} -> {mac}",
                 }
             )
-            log_event(logger, "honeypot", "retaliate_start", mac=mac, mode=retaliate_mode)
+            log_event(
+                logger,
+                "honeypot",
+                "retaliate_start",
+                mac=mac,
+                modes=modes,
+            )
 
             try:
-                from defender.streamer import stream_to_connection
-
-                asyncio.create_task(stream_to_connection(connection, device, mode=retaliate_mode))
+                for mode in modes:
+                    if mode in STREAM_MODES:
+                        asyncio.create_task(stream_to_connection(connection, device, mode=mode))
+                    elif mode in DEVICE_MODES:
+                        asyncio.create_task(device_mode_to_target(device, mac, mode=mode))
             except Exception as e:
                 log_event(logger, "honeypot", "retaliate_error", mac=mac, error=str(e))
 
