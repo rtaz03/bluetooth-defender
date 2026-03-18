@@ -32,8 +32,8 @@ defender/          # Main package
   honeypot.py      # Fake BT device that logs connection attempts
   streamer.py      # Byte-streaming deterrent
   utils/           # Shared helpers (logging, BT helpers)
-main.py            # CLI entrypoint: python main.py scan|honeypot|stream
-logs/              # Honeypot JSON logs (gitignored)
+main.py            # CLI entrypoint: python main.py scan|honeypot|stream|logs
+logs/              # JSONL logs from all tools (gitignored)
 ```
 
 ## Make Targets
@@ -48,7 +48,7 @@ make test        # Run pytest
 make scan        # Run scanner (pass ARGS="--known-devices devices.json")
 make honeypot    # Run honeypot (pass ARGS="--name 'Speaker' --retaliate")
 make stream      # Run streamer (pass ARGS="AA:BB:CC:DD:EE:FF --mode l2cap")
-make logs        # View honeypot log summary
+make logs        # View log summaries (all tools)
 make clean       # Remove venv, caches, build artifacts
 ```
 
@@ -58,7 +58,7 @@ make clean       # Remove venv, caches, build artifacts
 python main.py scan --known-devices devices.json
 python main.py honeypot --name "Speaker Name" [--retaliate --mode l2cap]
 python main.py stream <MAC> --mode <l2cap|a2dp_garbage|spp> --pattern <random|zeros|hex> --duration <seconds>
-python main.py logs
+python main.py logs [--tool honeypot|scanner|streamer] [--mac AA:BB:CC:DD:EE:FF] [--date 2026-03-18] [--raw] [--last N]
 ```
 
 ## Linting & Formatting
