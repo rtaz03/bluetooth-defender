@@ -614,6 +614,7 @@ async def run(
     interval: float = 0.01,
     duration: float | None = 10.0,
     known_devices_path: str | None = None,
+    usb_transport: str | None = None,
 ) -> None:
     """Run the streamer in standalone mode — connect to a target and stream bytes."""
     if not validate_mac(target):
@@ -646,7 +647,7 @@ async def run(
     console.print()
 
     # Open USB transport
-    transport = await find_usb_transport()
+    transport = await find_usb_transport(usb_transport)
 
     host = Host()
     host.hci_source = transport.source
@@ -655,9 +656,8 @@ async def run(
     device = Device(name="BT-Defender", host=host)
     await device.power_on()
 
+    tasks = []
     try:
-        tasks = []
-
         # Launch device-level modes (no connection needed)
         for m in dev_modes:
             tasks.append(
@@ -696,5 +696,9 @@ async def run(
         console.print(f"[red]Failed to connect to {target}: {e}[/red]")
         log_event(logger, "streamer", "connect_error", target=target, error=str(e))
     finally:
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         await device.power_off()
         transport.close()

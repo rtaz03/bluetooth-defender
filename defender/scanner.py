@@ -39,20 +39,103 @@ async def ble_scan(duration: float = 10.0) -> list[dict]:
     return results
 
 
-async def classic_scan(duration: float = 10.0) -> list[dict]:
+def list_usb_dongles() -> None:
+    """Print a table of USB Bluetooth HCI devices visible to bumble."""
+    try:
+        import usb1
+    except ImportError:
+        console.print("[red]usb1 not installed[/red]")
+        return
+
+    # USB class/subclass/protocol for Bluetooth HCI (fixed by USB spec)
+    BT_HCI = (0xE0, 0x01, 0x01)
+
+    context = usb1.USBContext()
+    context.open()
+
+    table = Table(title="USB Bluetooth Dongles")
+    table.add_column("Index", justify="right")
+    table.add_column("Vendor:Product")
+    table.add_column("Name")
+    table.add_column("Bus-Port")
+    table.add_column("--usb value")
+
+    index = 0
+    for device in context.getDeviceIterator(skip_on_error=True):
+        vid = device.getVendorID()
+        pid = device.getProductID()
+        dev_class = device.getDeviceClass()
+        dev_sub = device.getDeviceSubClass()
+        dev_proto = device.getDeviceProtocol()
+
+        is_bt = (dev_class, dev_sub, dev_proto) == BT_HCI
+        if not is_bt and dev_class == 0x00:
+            for cfg in device:
+                for iface in cfg:
+                    for setting in iface:
+                        if (setting.getClass(), setting.getSubClass(), setting.getProtocol()) == BT_HCI:
+                            is_bt = True
+                            break
+
+        if not is_bt:
+            device.close()
+            continue
+
+        try:
+            name = device.getProduct()
+        except usb1.USBError:
+            name = "Unknown"
+
+        bus = device.getBusNumber()
+        port = ".".join(map(str, device.getPortNumberList()))
+        table.add_row(
+            str(index),
+            f"{vid:04X}:{pid:04X}",
+            name or "Unknown",
+            f"{bus}-{port}",
+            f"{vid:04X}:{pid:04X}",
+        )
+        index += 1
+        device.close()
+
+    context.close()
+
+    if index == 0:
+        console.print("[yellow]No USB Bluetooth HCI devices found.[/yellow]")
+    else:
+        console.print(table)
+        console.print("[dim]Use the [bold]--usb value[/bold] column with: python main.py scan --usb <value>[/dim]")
+
+
+async def classic_scan(duration: float = 10.0, usb_transport: str | None = None) -> list[dict]:
     """Scan for Classic BT devices using bumble (requires USB dongle)."""
     results = []
+    transport = None
     try:
         from bumble.device import Device
         from bumble.host import Host
         from bumble.transport import open_transport
 
-        transport = await open_transport("usb:0")
+        if usb_transport is not None:
+            transport_spec = f"usb:{usb_transport}"
+            transport = await asyncio.wait_for(open_transport(transport_spec), timeout=5.0)
+        else:
+            for usb_index in range(4):
+                try:
+                    transport = await asyncio.wait_for(
+                        open_transport(f"usb:{usb_index}"), timeout=3.0
+                    )
+                    break
+                except Exception:
+                    continue
+            if transport is None:
+                raise RuntimeError("no USB Bluetooth dongle found (tried usb:0–3)")
+
         host = Host()
         host.hci_source = transport.source
         host.hci_sink = transport.sink
         device = Device(host=host)
-        await device.power_on()
+        await asyncio.wait_for(device.power_on(), timeout=10.0)
 
         console.print(f"[bold blue]Scanning Classic BT devices for {duration}s...[/bold blue]")
 
@@ -78,11 +161,16 @@ async def classic_scan(duration: float = 10.0) -> list[dict]:
         await device.start_inquiry(duration=duration)
         await asyncio.sleep(duration + 1)
         await device.power_off()
-        transport.close()
         results = found_devices
 
     except Exception as e:
         console.print(f"[yellow]Classic BT scan skipped (USB dongle not available): {e}[/yellow]")
+    finally:
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception:
+                pass
 
     return results
 
@@ -187,15 +275,23 @@ def print_report(analysis: dict, all_devices: list[dict]) -> None:
     console.print(f"[dim]Total devices found: {len(all_devices)}[/dim]")
 
 
-async def run(known_devices_path: str | None = None, duration: float = 10.0) -> None:
+async def run(
+    known_devices_path: str | None = None,
+    duration: float = 10.0,
+    usb_transport: str | None = None,
+) -> None:
     """Run the scanner."""
     known = load_known_devices(known_devices_path) if known_devices_path else []
 
-    # Run BLE and Classic scans concurrently
-    ble_results, classic_results = await asyncio.gather(
-        ble_scan(duration),
-        classic_scan(duration),
-    )
+    if usb_transport and usb_transport.lower() == "none":
+        ble_results = await ble_scan(duration)
+        classic_results = []
+    else:
+        # Run BLE and Classic scans concurrently
+        ble_results, classic_results = await asyncio.gather(
+            ble_scan(duration),
+            classic_scan(duration, usb_transport=usb_transport),
+        )
 
     all_devices = ble_results + classic_results
 

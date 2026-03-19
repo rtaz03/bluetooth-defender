@@ -15,42 +15,60 @@ LOGS_DIR = Path(__file__).parent / "logs"
 def cmd_scan(args):
     from defender.scanner import run
 
-    asyncio.run(
-        run(
-            known_devices_path=args.known_devices,
-            duration=args.duration,
+    try:
+        asyncio.run(
+            run(
+                known_devices_path=args.known_devices,
+                duration=args.duration,
+                usb_transport=args.usb,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        pass
+
+
+def cmd_list_usb(args):
+    from defender.scanner import list_usb_dongles
+
+    list_usb_dongles()
 
 
 def cmd_honeypot(args):
     from defender.honeypot import run
 
-    asyncio.run(
-        run(
-            name=args.name,
-            device_class=args.device_class,
-            retaliate=args.retaliate,
-            retaliate_mode=args.mode,
-            known_devices_path=args.known_devices,
+    try:
+        asyncio.run(
+            run(
+                name=args.name,
+                device_class=args.device_class,
+                retaliate=args.retaliate,
+                retaliate_mode=args.mode,
+                known_devices_path=args.known_devices,
+                usb_transport=args.usb,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        pass
 
 
 def cmd_stream(args):
     from defender.streamer import run
 
-    asyncio.run(
-        run(
-            target=args.target,
-            mode=args.mode,
-            pattern=args.pattern,
-            packet_size=args.packet_size,
-            interval=args.interval,
-            duration=args.duration,
-            known_devices_path=args.known_devices,
+    try:
+        asyncio.run(
+            run(
+                target=args.target,
+                mode=args.mode,
+                pattern=args.pattern,
+                packet_size=args.packet_size,
+                interval=args.interval,
+                duration=args.duration,
+                known_devices_path=args.known_devices,
+                usb_transport=args.usb,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        pass
 
 
 def _load_events(tool_filter=None, mac_filter=None, date_filter=None):
@@ -430,7 +448,20 @@ def cli():
         default=10.0,
         help="Scan duration in seconds (default: 10)",
     )
+    scan_parser.add_argument(
+        "--usb",
+        "-u",
+        type=str,
+        default=None,
+        help="USB dongle transport: index (0, 1), vendor:product hex (2357:0604), or 'none' to skip classic scan",
+    )
     scan_parser.set_defaults(func=cmd_scan)
+
+    # list-usb
+    list_usb_parser = subparsers.add_parser(
+        "list-usb", help="List USB Bluetooth dongles available for classic scanning"
+    )
+    list_usb_parser.set_defaults(func=cmd_list_usb)
 
     # honeypot
     hp_parser = subparsers.add_parser("honeypot", help="Run a fake Bluetooth device honeypot")
@@ -481,6 +512,13 @@ def cli():
         type=str,
         default=None,
         help="Path to known devices JSON (protected from retaliation)",
+    )
+    hp_parser.add_argument(
+        "--usb",
+        "-u",
+        type=str,
+        default=None,
+        help="USB dongle transport: index (0, 1) or vendor:product hex (2357:0604). Run list-usb to find values.",
     )
     hp_parser.set_defaults(func=cmd_honeypot)
 
@@ -535,6 +573,13 @@ def cli():
         type=str,
         default=None,
         help="Path to known devices JSON (refuses to target listed MACs)",
+    )
+    stream_parser.add_argument(
+        "--usb",
+        "-u",
+        type=str,
+        default=None,
+        help="USB dongle transport: index (0, 1) or vendor:product hex (2357:0604). Run list-usb to find values.",
     )
     stream_parser.set_defaults(func=cmd_stream)
 

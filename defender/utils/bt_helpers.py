@@ -1,5 +1,6 @@
 """Common Bluetooth helpers — device class parsing, RSSI formatting, transport discovery."""
 
+import asyncio
 import json
 import re
 import sys
@@ -98,21 +99,30 @@ def load_known_devices(path: str | Path) -> list[dict]:
     return devices
 
 
-async def find_usb_transport():
-    """Try to open a bumble USB HCI transport. Returns (hci_source, hci_sink) or exits with help."""
+async def find_usb_transport(transport_spec: str | None = None):
+    """Try to open a bumble USB HCI transport. Returns transport or exits with help.
+
+    transport_spec: bumble USB spec (e.g. '2357:0604', '1'). If None, probes usb:0–3.
+    """
     try:
         from bumble.transport import open_transport
 
-        transport = await open_transport("usb:0")
-        return transport
+        if transport_spec is not None:
+            return await asyncio.wait_for(open_transport(f"usb:{transport_spec}"), timeout=5.0)
+
+        for index in range(4):
+            try:
+                return await asyncio.wait_for(open_transport(f"usb:{index}"), timeout=3.0)
+            except Exception:
+                continue
+
+        raise RuntimeError("no USB Bluetooth dongle found (tried usb:0–3)")
     except Exception as e:
         print(
             f"Failed to open USB Bluetooth adapter: {e}\n\n"
-            "The honeypot and streamer require a USB Bluetooth dongle (e.g. CSR8510).\n"
-            "The built-in Mac Bluetooth adapter is locked down by CoreBluetooth.\n\n"
-            "1. Plug in a USB BT dongle\n"
-            "2. Make sure no other driver is claiming it\n"
-            "3. Try again",
+            "The honeypot and streamer require a USB Bluetooth dongle.\n"
+            "Run 'python main.py list-usb' to see available dongles,\n"
+            "then pass the value with --usb (e.g. --usb 2357:0604).",
             file=sys.stderr,
         )
         sys.exit(1)

@@ -1,4 +1,4 @@
-.PHONY: install dev lint format check test clean scan honeypot stream logs
+.PHONY: install dev lint format check test clean scan list-usb honeypot stream logs
 
 PYTHON ?= python
 VENV := .venv
@@ -33,6 +33,9 @@ test:
 # Bluetooth Defender commands
 scan: install
 	$(BIN)/python main.py scan $(ARGS)
+
+list-usb: install
+	$(BIN)/python main.py list-usb
 
 honeypot: install
 	$(BIN)/python main.py honeypot $(ARGS)

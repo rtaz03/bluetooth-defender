@@ -176,6 +176,7 @@ async def run(
     retaliate: bool = False,
     retaliate_mode: str = "l2cap",
     known_devices_path: str | None = None,
+    usb_transport: str | None = None,
 ) -> None:
     """Run the Bluetooth honeypot."""
     from defender.utils.bt_helpers import load_known_devices
@@ -191,7 +192,7 @@ async def run(
     console.print()
 
     # Open USB transport
-    transport = await find_usb_transport()
+    transport = await find_usb_transport(usb_transport)
 
     # Configure device
     host = Host()
@@ -207,118 +208,130 @@ async def run(
         0x00010002: make_spp_record(0x00010002),
     }
 
-    await device.power_on()
+    powered_on = False
+    try:
+        await device.power_on()
+        powered_on = True
 
-    # Make discoverable and connectable
-    await device.set_discoverable(True)
-    await device.set_connectable(True)
+        # Make discoverable and connectable
+        await device.set_discoverable(True)
+        await device.set_connectable(True)
 
-    state = HoneypotState()
+        state = HoneypotState()
 
-    @device.on("connection")
-    async def on_connection(connection):
-        mac = normalize_mac(str(connection.peer_address))
-        now = datetime.now(UTC)
-        time_short = now.strftime("%H:%M:%S")
+        @device.on("connection")
+        async def on_connection(connection):
+            mac = normalize_mac(str(connection.peer_address))
+            now = datetime.now(UTC)
+            time_short = now.strftime("%H:%M:%S")
 
-        rssi = getattr(connection, "rssi", None)
-        distance = rssi_to_distance_estimate(rssi) if rssi is not None else "unknown"
+            rssi = getattr(connection, "rssi", None)
+            distance = rssi_to_distance_estimate(rssi) if rssi is not None else "unknown"
 
-        info = {
-            "mac": mac,
-            "name": connection.peer_name or "Unknown",
-            "connected_at": time_short,
-            "transport": str(connection.transport),
-            "rssi": rssi,
-            "distance": distance,
-        }
-
-        state.add_connection(mac, info)
-        state.add_event(
-            {
-                "time": time_short,
-                "type": "CONNECT",
-                "details": f"{mac} ({info['name']}) RSSI: {rssi} ({distance})",
+            info = {
+                "mac": mac,
+                "name": connection.peer_name or "Unknown",
+                "connected_at": time_short,
+                "transport": str(connection.transport),
+                "rssi": rssi,
+                "distance": distance,
             }
-        )
 
-        log_data = {
-            "mac": mac,
-            "device_name": info["name"],
-            "rssi": rssi,
-            "distance": distance,
-            "transport": str(connection.transport),
-            "handle": connection.handle,
-        }
-        log_event(logger, "honeypot", "connection", **log_data)
-
-        console.print(
-            f"[bold red]CONNECTION from {mac} ({info['name']})[/bold red] "
-            f"[dim]RSSI: {rssi} dBm — {distance}[/dim]"
-        )
-
-        # Retaliate if enabled
-        if retaliate and mac not in known_macs:
-            from defender.streamer import (
-                DEVICE_MODES,
-                STREAM_MODES,
-                device_mode_to_target,
-                stream_to_connection,
-            )
-
-            modes = [m.strip() for m in retaliate_mode.split(",") if m.strip()]
+            state.add_connection(mac, info)
             state.add_event(
                 {
                     "time": time_short,
-                    "type": "RETALIATE",
-                    "details": f"Modes: {', '.join(modes)} -> {mac}",
+                    "type": "CONNECT",
+                    "details": f"{mac} ({info['name']}) RSSI: {rssi} ({distance})",
                 }
             )
-            log_event(
-                logger,
-                "honeypot",
-                "retaliate_start",
-                mac=mac,
-                modes=modes,
+
+            log_data = {
+                "mac": mac,
+                "device_name": info["name"],
+                "rssi": rssi,
+                "distance": distance,
+                "transport": str(connection.transport),
+                "handle": connection.handle,
+            }
+            log_event(logger, "honeypot", "connection", **log_data)
+
+            console.print(
+                f"[bold red]CONNECTION from {mac} ({info['name']})[/bold red] "
+                f"[dim]RSSI: {rssi} dBm — {distance}[/dim]"
             )
 
-            try:
-                for mode in modes:
-                    if mode in STREAM_MODES:
-                        asyncio.create_task(stream_to_connection(connection, device, mode=mode))
-                    elif mode in DEVICE_MODES:
-                        asyncio.create_task(device_mode_to_target(device, mac, mode=mode))
-            except Exception as e:
-                log_event(logger, "honeypot", "retaliate_error", mac=mac, error=str(e))
+            # Retaliate if enabled
+            if retaliate and mac not in known_macs:
+                from defender.streamer import (
+                    DEVICE_MODES,
+                    STREAM_MODES,
+                    device_mode_to_target,
+                    stream_to_connection,
+                )
 
-        @connection.on("disconnection")
-        def on_disconnection(reason):
-            state.remove_connection(mac)
-            state.add_event(
-                {
-                    "time": datetime.now(UTC).strftime("%H:%M:%S"),
-                    "type": "DISCONNECT",
-                    "details": f"{mac} (reason: {reason})",
-                }
-            )
-            log_event(
-                logger,
-                "honeypot",
-                "disconnection",
-                mac=mac,
-                reason=str(reason),
-            )
+                modes = [m.strip() for m in retaliate_mode.split(",") if m.strip()]
+                state.add_event(
+                    {
+                        "time": time_short,
+                        "type": "RETALIATE",
+                        "details": f"Modes: {', '.join(modes)} -> {mac}",
+                    }
+                )
+                log_event(
+                    logger,
+                    "honeypot",
+                    "retaliate_start",
+                    mac=mac,
+                    modes=modes,
+                )
 
-    console.print("[bold green]Honeypot is live. Press Ctrl+C to stop.[/bold green]\n")
+                try:
+                    for mode in modes:
+                        if mode in STREAM_MODES:
+                            asyncio.create_task(stream_to_connection(connection, device, mode=mode))
+                        elif mode in DEVICE_MODES:
+                            asyncio.create_task(device_mode_to_target(device, mac, mode=mode))
+                except Exception as e:
+                    log_event(logger, "honeypot", "retaliate_error", mac=mac, error=str(e))
 
-    # Keep running with live display
-    try:
+            @connection.on("disconnection")
+            def on_disconnection(reason):
+                state.remove_connection(mac)
+                state.add_event(
+                    {
+                        "time": datetime.now(UTC).strftime("%H:%M:%S"),
+                        "type": "DISCONNECT",
+                        "details": f"{mac} (reason: {reason})",
+                    }
+                )
+                log_event(
+                    logger,
+                    "honeypot",
+                    "disconnection",
+                    mac=mac,
+                    reason=str(reason),
+                )
+
+        console.print("[bold green]Honeypot is live. Press Ctrl+C to stop.[/bold green]\n")
+
         with Live(build_live_display(state), console=console, refresh_per_second=2) as live:
             while True:
                 live.update(build_live_display(state))
                 await asyncio.sleep(0.5)
+
     except (KeyboardInterrupt, asyncio.CancelledError):
         console.print("\n[yellow]Shutting down honeypot...[/yellow]")
     finally:
-        await device.power_off()
+        current = asyncio.current_task()
+        background = [t for t in asyncio.all_tasks() if t is not current]
+        for t in background:
+            t.cancel()
+        if background:
+            await asyncio.gather(*background, return_exceptions=True)
+        if powered_on:
+            try:
+                await device.power_off()
+            except Exception:
+                pass
         transport.close()
