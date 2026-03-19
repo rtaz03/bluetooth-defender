@@ -1,6 +1,7 @@
 """Passive Bluetooth scanning and defense recommendations."""
 
 import asyncio
+import contextlib
 
 from bleak import BleakScanner
 from rich.console import Console
@@ -73,7 +74,11 @@ def list_usb_dongles() -> None:
             for cfg in device:
                 for iface in cfg:
                     for setting in iface:
-                        if (setting.getClass(), setting.getSubClass(), setting.getProtocol()) == BT_HCI:
+                        if (
+                            setting.getClass(),
+                            setting.getSubClass(),
+                            setting.getProtocol(),
+                        ) == BT_HCI:
                             is_bt = True
                             break
 
@@ -104,7 +109,9 @@ def list_usb_dongles() -> None:
         console.print("[yellow]No USB Bluetooth HCI devices found.[/yellow]")
     else:
         console.print(table)
-        console.print("[dim]Use the [bold]--usb value[/bold] column with: python main.py scan --usb <value>[/dim]")
+        console.print(
+            "[dim]Use the [bold]--usb value[/bold] column with: python main.py scan --usb <value>[/dim]"
+        )
 
 
 async def classic_scan(duration: float = 10.0, usb_transport: str | None = None) -> list[dict]:
@@ -167,10 +174,8 @@ async def classic_scan(duration: float = 10.0, usb_transport: str | None = None)
         console.print(f"[yellow]Classic BT scan skipped (USB dongle not available): {e}[/yellow]")
     finally:
         if transport is not None:
-            try:
+            with contextlib.suppress(Exception):
                 transport.close()
-            except Exception:
-                pass
 
     return results
 

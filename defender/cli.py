@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 
@@ -31,7 +32,7 @@ def _save_config(config: dict) -> None:
 def cmd_scan(args):
     from defender.scanner import run
 
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(
             run(
                 known_devices_path=args.known_devices,
@@ -39,8 +40,6 @@ def cmd_scan(args):
                 usb_transport=args.usb,
             )
         )
-    except KeyboardInterrupt:
-        pass
 
 
 def cmd_list_usb(args):
@@ -65,7 +64,7 @@ def cmd_set_usb(args):
 def cmd_honeypot(args):
     from defender.honeypot import run
 
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(
             run(
                 name=args.name,
@@ -76,14 +75,12 @@ def cmd_honeypot(args):
                 usb_transport=args.usb,
             )
         )
-    except KeyboardInterrupt:
-        pass
 
 
 def cmd_stream(args):
     from defender.streamer import run
 
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(
             run(
                 target=args.target,
@@ -96,8 +93,6 @@ def cmd_stream(args):
                 usb_transport=args.usb,
             )
         )
-    except KeyboardInterrupt:
-        pass
 
 
 def _load_events(tool_filter=None, mac_filter=None, date_filter=None):

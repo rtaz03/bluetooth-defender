@@ -1,6 +1,7 @@
 """Bluetooth honeypot — fake device that logs all connection attempts with full forensics."""
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime
 
 from bumble.core import (
@@ -330,8 +331,6 @@ async def run(
         if background:
             await asyncio.gather(*background, return_exceptions=True)
         if powered_on:
-            try:
+            with contextlib.suppress(Exception):
                 await device.power_off()
-            except Exception:
-                pass
         transport.close()
