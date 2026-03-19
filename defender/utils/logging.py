@@ -6,7 +6,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-LOGS_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
+LOGS_DIR = Path.home() / ".bt-defender" / "logs"
 
 
 class JsonFormatter(logging.Formatter):
